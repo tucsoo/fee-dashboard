@@ -4,3 +4,12 @@ data/*.db-wal
 data/*.db-shm
 .env
 .DS_Store
+
+# Temp/debug files
+*.json
+!package.json
+!package-lock.json
+tmp-*
+fetch-*.js
+test-sync.js
+analyze_*.js
