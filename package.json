@@ -1,0 +1,21 @@
+{
+  "name": "axiom-fee-dashboard",
+  "version": "1.0.0",
+  "description": "Dashboard for tracking Axiom trading bot collected fees on Solana",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "fetch": "node src/fetcher.js",
+    "test": "node tests/test-anomaly.js"
+  },
+  "dependencies": {
+    "@flipsidecrypto/sdk": "^2.1.0",
+    "@solana/web3.js": "^1.98.4",
+    "better-sqlite3": "^12.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^4.18.0"
+  }
+}

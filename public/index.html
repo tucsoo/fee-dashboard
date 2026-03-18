@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Terminal Stats — Solana Trading Bot Fee Analytics</title>
+  <meta name="description"
+    content="Real-time on-chain analytics tracking collected fees from Solana trading terminals with anomaly detection.">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+
+<body>
+  <div class="app">
+    <!-- Header -->
+    <header class="header" id="header">
+      <div class="logo">
+        <h1 class="logo-text" style="text-transform: none; font-size: 32px; letter-spacing: -0.04em;">
+          <span class="logo-letter">T</span><span class="logo-letter">e</span><span class="logo-letter">r</span><span class="logo-letter">m</span><span class="logo-letter">i</span><span class="logo-letter">n</span><span class="logo-letter">a</span><span class="logo-letter">l</span>
+          <span class="logo-accent" style="font-size: 32px; font-weight: 800; font-style: italic;">Fees</span>
+        </h1>
+      </div>
+      <div class="project-info">
+        <a href="https://axiom.trade/discover?chain=sol" target="_blank" class="project-link" id="projectLink">
+          <img src="https://axiom.trade/favicon.ico" alt="Axiom" class="project-logo" id="projectLogo">
+          <span class="project-name" id="projectName">Axiom</span>
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style="opacity:0.4">
+            <path d="M4.5 2.5V4H11.29L2 13.29L3.41 14.7L12.71 5.41V12.2H14.21V2.5H4.5Z" />
+          </svg>
+        </a>
+        <div class="project-divider"></div>
+        <a href="https://x.com/AxiomExchange" target="_blank" class="project-social" title="@AxiomExchange" id="projectSocial">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+            <path
+              d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
+          </svg>
+        </a>
+      </div>
+      <span class="project-rank">position: <em id="terminalRank">#1</em></span>
+      <div class="header-right">
+        <div class="status-indicator" id="statusIndicator">
+          <span class="status-dot"></span>
+          <span class="status-text">Loading...</span>
+        </div>
+        <button class="btn btn-refresh" id="btnRefresh" title="Refresh data">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none">
+            <path d="M13.65 2.35A8 8 0 1 0 16 8h-2a6 6 0 1 1-1.76-4.24L10 6h6V0l-2.35 2.35z" fill="currentColor" />
+          </svg>
+          SYNC
+        </button>
+      </div>
+    </header>
+
+    <!-- Terminal Tabs -->
+    <nav class="terminal-tabs" id="terminalTabs">
+      <button class="terminal-tab" data-terminal="overall">Overall</button>
+      <button class="terminal-tab active" data-terminal="axiom">Axiom</button>
+      <button class="terminal-tab" data-terminal="gmgn">GMGN</button>
+      <button class="terminal-tab" data-terminal="padre">Padre</button>
+      <button class="terminal-tab" data-terminal="fomo">Fomo</button>
+      <button class="terminal-tab" data-terminal="trojan">Trojan</button>
+      <button class="terminal-tab" data-terminal="photon">Photon</button>
+      <button class="terminal-tab" data-terminal="maestro">Maestro</button>
+      <button class="terminal-tab" data-terminal="universalx">UniversalX</button>
+    </nav>
+
+    <!-- Header Row -->
+
+    <!-- Summary Cards — 3 cards -->
+    <section class="cards-grid cards-3" id="summaryCards">
+      <!-- Card 1: LAST (fees) with timeframe switcher + anomalies toggle -->
+      <div class="card card-accent" id="cardLast">
+        <div class="card-header-row">
+          <div class="card-label">Fees</div>
+          <div class="card-tabs" id="feeTabs">
+            <button class="card-tab" data-fee-period="24h">24H</button>
+            <button class="card-tab" data-fee-period="week">Week</button>
+            <button class="card-tab active" data-fee-period="month">Month</button>
+          </div>
+        </div>
+        <div class="card-value" id="feesValue">—</div>
+        <div class="card-bottom-row">
+          <label class="toggle-label toggle-small" id="anomalyToggleCard">
+            <span>Anomalies</span>
+            <input type="checkbox" id="includeAnomaliesCard">
+            <span class="toggle-switch"></span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Card 2: ACTIVE USERS with period switcher -->
+      <div class="card" id="cardUsers">
+        <div class="card-header-row">
+          <div class="card-label">Active Users</div>
+          <div class="card-tabs" id="userTabs">
+            <button class="card-tab" data-user-period="daily">Daily</button>
+            <button class="card-tab" data-user-period="weekly">Weekly</button>
+            <button class="card-tab active" data-user-period="monthly">Monthly</button>
+          </div>
+        </div>
+        <div class="card-value" id="activeUsers">—</div>
+      </div>
+
+      <!-- Card 3: ANOMALY RATE / VOLUME -->
+      <div class="card card-warning" id="cardAnomaly">
+        <div class="card-header-row">
+          <div class="card-label" id="card3Label">Anomaly Rate</div>
+        </div>
+        <div class="card-value" id="card3Value">—</div>
+        <div class="card-subtitle" id="card3Subtitle"></div>
+      </div>
+    </section>
+
+    <!-- Chart Section -->
+    <section class="chart-section">
+      <div class="section-header">
+        <h2 class="section-title">Collected Fees</h2>
+        <div class="chart-controls">
+          <label class="toggle-label" id="anomalyToggleChart">
+            <span>Include Anomalies</span>
+            <input type="checkbox" id="includeAnomaliesChart">
+            <span class="toggle-switch"></span>
+          </label>
+          <div class="period-tabs" id="periodTabs">
+            <button class="period-tab" data-period="1">24H</button>
+            <button class="period-tab" data-period="7">7D</button>
+            <button class="period-tab active" data-period="14">14D</button>
+            <button class="period-tab" data-period="30">30D</button>
+          </div>
+        </div>
+      </div>
+      <div class="chart-container">
+        <canvas id="feesChart"></canvas>
+      </div>
+    </section>
+
+    <!-- Terminal Details — Carousel -->
+    <section class="terminal-details">
+      <div class="section-header">
+        <h2 class="section-title">Terminal Details</h2>
+        <div class="carousel-nav">
+          <button class="carousel-arrow" id="carouselPrev">‹</button>
+          <div class="carousel-dots" id="carouselDots">
+            <span class="carousel-dot" data-slide="0" id="leaderboardDot"></span>
+            <span class="carousel-dot active" data-slide="1"></span>
+            <span class="carousel-dot" data-slide="2"></span>
+            <span class="carousel-dot" data-slide="3" id="vaultsDot"></span>
+          </div>
+          <button class="carousel-arrow" id="carouselNext">›</button>
+        </div>
+      </div>
+
+      <div class="carousel-track" id="carouselTrack">
+        <!-- Slide 0: Terminal Leaderboard (Overall only) -->
+        <div class="carousel-slide" data-slide="0" id="terminalLeaderboard">
+          <div class="panel">
+            <div class="section-header" style="justify-content: space-between;">
+              <h2 class="section-title">Terminal Leaderboard</h2>
+            </div>
+            <div class="leaderboard-list" id="leaderboardList" style="display: flex; flex-direction: column; gap: 16px; margin-top: 16px;">
+              <div style="text-align: center; color: var(--text-muted); font-size: 12px;">Loading rankings...</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Slide 1: Top Traders -->
+        <div class="carousel-slide active" data-slide="1">
+          <div class="panel">
+            <div class="section-header">
+              <h2 class="section-title">Top Traders</h2>
+              <span class="badge badge-danger" id="traderCount">0</span>
+            </div>
+            <div class="table-wrapper">
+              <table class="data-table" id="tradersTable">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Wallet</th>
+                    <th>Fees (SOL)</th>
+                    <th>Txns</th>
+                    <th>Days</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="tradersBody">
+                  <tr>
+                    <td colspan="6" class="empty-state">Syncing data...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Slide 2: Detected Anomalies -->
+        <div class="carousel-slide" data-slide="2">
+          <div class="panel">
+            <div class="section-header">
+              <h2 class="section-title">Detected Anomalies</h2>
+              <span class="badge badge-danger" id="anomalyCount">0</span>
+            </div>
+            <div class="table-wrapper">
+              <table class="data-table" id="anomaliesTable">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Wallet</th>
+                    <th>Fees (SOL)</th>
+                    <th>Txns</th>
+                    <th>Days</th>
+                    <th>Score</th>
+                  </tr>
+                </thead>
+                <tbody id="anomaliesBody">
+                  <tr>
+                    <td colspan="6" class="empty-state">Analyzing patterns...</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Slide 3: Fee Vaults -->
+        <div class="carousel-slide" data-slide="3" id="feeVaultsSlide">
+          <div class="panel">
+            <div class="section-header">
+              <h2 class="section-title">Fee Vaults</h2>
+              <span class="badge badge-danger" id="vaultCount">0</span>
+            </div>
+            <div class="vaults-list" id="vaultsList">
+              <!-- filled by JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <p>on-chain data · fees vaults · anomaly detection</p>
+      <p id="lastUpdated"></p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+
+</html>
