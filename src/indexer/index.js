@@ -307,47 +307,9 @@ async function processSignatures(signaturesToProcess, feeVaults, terminalName) {
 }
 
 /**
- * Fetch ALL signatures for a single address with full pagination.
- * Uses `before` cursor to page backwards through history until we hit `untilSig` or run out.
- */
-async function fetchAllSignatures(address, untilSig = null) {
-    const PAGE_SIZE = 1000; // RPC max per call
-    const MAX_PAGES = 50;   // safety limit: 50 * 1000 = 50k sigs max per sync
-    const allSigs = [];
-    let beforeSig = undefined;
-    
-    for (let page = 0; page < MAX_PAGES; page++) {
-        const options = { limit: PAGE_SIZE };
-        if (beforeSig) options.before = beforeSig;
-        if (untilSig) options.until = untilSig;
-        
-        let batch;
-        try {
-            batch = await rpcPool.getSignaturesForAddress(address, options);
-        } catch (e) {
-            console.warn(`[Indexer] Failed to fetch sigs for ${address.slice(0, 8)}...: ${e.message}`);
-            break;
-        }
-        
-        if (!batch || batch.length === 0) break;
-        
-        allSigs.push(...batch);
-        
-        // If we got fewer than PAGE_SIZE, we've reached the end
-        if (batch.length < PAGE_SIZE) break;
-        
-        // Set cursor for next page (oldest sig in this batch)
-        beforeSig = batch[batch.length - 1].signature;
-        
-        // Small delay between pages to not hammer RPC
-        await new Promise(r => setTimeout(r, 200));
-    }
-    
-    return allSigs;
-}
-
-/**
- * Syncs a single terminal (all its vaults)
+ * Syncs a single terminal (all its vaults) — FORWARD ONLY.
+ * First run: saves marker (newest sig) without processing. No backwards crawl.
+ * Subsequent runs: fetches everything newer than marker using `until`.
  */
 async function syncTerminal(terminalName, vaults) {
     if (!vaults || vaults.length === 0) return;
@@ -357,17 +319,56 @@ async function syncTerminal(terminalName, vaults) {
             const state = getLastSyncState(vault) || {};
             const lastSig = state.last_signature;
             
-            // Query signatures from the base vault AND its token ATAs (USDC, USDT)
+            // Query addresses: base vault + USDC/USDT ATAs
             const queryAddresses = getVaultQueryAddresses(vault);
             
-            // Fetch ALL signatures with full pagination for each address
-            const allSigArrays = await Promise.all(
-                queryAddresses.map(addr => 
-                    fetchAllSignatures(addr, lastSig)
-                )
-            );
+            if (!lastSig) {
+                // FIRST RUN: just save the newest signature as our starting marker.
+                // We don't process anything — indexer works forward-only from here.
+                try {
+                    const sigs = await rpcPool.getSignaturesForAddress(queryAddresses[0], { limit: 1 });
+                    if (sigs && sigs.length > 0) {
+                        updateSyncState(vault, sigs[0].signature, sigs[0].blockTime, 0);
+                        console.log(`[Indexer] ${terminalName} (${vault.slice(0, 4)}...): marker set. Collecting forward from now.`);
+                    }
+                } catch (e) {
+                    console.warn(`[Indexer] Failed to set marker for ${terminalName} (${vault.slice(0, 4)}...): ${e.message}`);
+                }
+                continue;
+            }
             
-            // Merge and de-duplicate signatures by signature string
+            // SUBSEQUENT RUNS: fetch all NEW signatures since lastSig
+            // `until` = return sigs NEWER than this (not including it)
+            const MAX_PAGES = 5; // safety: max 5 * 1000 = 5000 new sigs per poll
+            const allSigArrays = [];
+            
+            for (const addr of queryAddresses) {
+                const addrSigs = [];
+                let beforeSig = undefined;
+                
+                for (let page = 0; page < MAX_PAGES; page++) {
+                    const options = { limit: 1000, until: lastSig };
+                    if (beforeSig) options.before = beforeSig;
+                    
+                    let batch;
+                    try {
+                        batch = await rpcPool.getSignaturesForAddress(addr, options);
+                    } catch (e) {
+                        break;
+                    }
+                    
+                    if (!batch || batch.length === 0) break;
+                    addrSigs.push(...batch);
+                    
+                    if (batch.length < 1000) break;
+                    beforeSig = batch[batch.length - 1].signature;
+                    await new Promise(r => setTimeout(r, 100));
+                }
+                
+                allSigArrays.push(addrSigs);
+            }
+            
+            // Merge and de-duplicate
             const sigMap = new Map();
             for (const sigs of allSigArrays) {
                 for (const s of sigs) {
@@ -382,17 +383,12 @@ async function syncTerminal(terminalName, vaults) {
             
             const inserted = await processSignatures(newSignatures, vaults, terminalName);
             
-            // Update state with the most recent signature (which is the first in the array)
+            // Update marker to newest sig
             const mostRecentSig = newSignatures[0];
-            updateSyncState(
-                vault,
-                mostRecentSig.signature,
-                mostRecentSig.blockTime,
-                inserted
-            );
+            updateSyncState(vault, mostRecentSig.signature, mostRecentSig.blockTime, inserted);
             
-            if (inserted > 0 || newSignatures.length > 100) {
-                console.log(`[Indexer] ${terminalName} (${vault.slice(0, 4)}...): parsed ${inserted}/${newSignatures.length} relevant transfers.`);
+            if (inserted > 0) {
+                console.log(`[Indexer] ${terminalName} (${vault.slice(0, 4)}...): +${inserted} fees from ${newSignatures.length} new txs.`);
             }
             
         } catch (e) {
