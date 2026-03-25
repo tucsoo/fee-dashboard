@@ -158,6 +158,59 @@ export function getTraders(terminal, daysBack = 30, limit = 50) {
     `).all(terminal, cutoff, limit);
 }
 
+/**
+ * Get coefficient of variation (CV) for each trader's daily volume.
+ * CV = stdev / mean. Low CV (< 0.05) = suspiciously consistent = likely wash trading.
+ * Requires at least `minDays` active days to be meaningful.
+ */
+export function getTraderVolatility(terminal, daysBack = 30, minDays = 5) {
+    const cutoff = Math.floor(Date.now() / 1000) - (daysBack * 86400);
+    
+    const isOverall = terminal === 'overall';
+    const terminalClause = isOverall ? '' : 'AND t.terminal = ?';
+    const params = isOverall ? [cutoff, minDays] : [cutoff, terminal, minDays];
+    
+    return getDB().prepare(`
+        WITH daily AS (
+            SELECT 
+                t.sender,
+                date(t.timestamp, 'unixepoch') as day,
+                SUM(t.sol_received) as daily_sol,
+                COUNT(*) as daily_txs
+            FROM transactions t
+            WHERE t.timestamp >= ? ${terminalClause}
+            GROUP BY t.sender, date(t.timestamp, 'unixepoch')
+        ),
+        stats AS (
+            SELECT 
+                sender,
+                COUNT(*) as active_days,
+                AVG(daily_sol) as avg_daily_sol,
+                AVG(daily_txs) as avg_daily_txs,
+                -- Variance = E[X²] - E[X]²  →  stdev = sqrt(variance)
+                CASE 
+                    WHEN COUNT(*) < 2 THEN 999.0
+                    ELSE SQRT(MAX(0, AVG(daily_sol * daily_sol) - AVG(daily_sol) * AVG(daily_sol)))
+                END as std_daily_sol
+            FROM daily
+            GROUP BY sender
+            HAVING active_days >= ?
+        )
+        SELECT 
+            sender,
+            active_days,
+            avg_daily_sol,
+            avg_daily_txs,
+            std_daily_sol,
+            CASE 
+                WHEN avg_daily_sol > 0 THEN std_daily_sol / avg_daily_sol 
+                ELSE 1.0 
+            END as cv
+        FROM stats
+        ORDER BY cv ASC
+    `).all(...params);
+}
+
 export function getSummary(terminal) {
     const now = Math.floor(Date.now() / 1000);
     const db = getDB();

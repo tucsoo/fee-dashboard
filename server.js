@@ -10,7 +10,8 @@ import {
     getTraders,
     getSummary,
     getDB,
-    getTerminalRankings
+    getTerminalRankings,
+    getTraderVolatility
 } from './src/database.js';
 import { SERVER_CONFIG, getVaultsForTerminal, ANOMALY_CONFIG, TERMINAL_VAULTS } from './src/config.js';
 import { startIndexer } from './src/indexer/index.js';
@@ -80,6 +81,10 @@ app.get('/api/traders', (req, res) => {
 
         const rows = getTraders(terminal, daysBack, limit);
         
+        // Get CV data for all wallets with enough history
+        const cvData = getTraderVolatility(terminal, daysBack, ANOMALY_CONFIG.minDaysForCV);
+        const cvMap = new Map(cvData.map(r => [r.sender, r]));
+        
         const traders = rows.map((r, i) => ({
             rank: i + 1,
             wallet: r.wallet,
@@ -91,28 +96,39 @@ app.get('/api/traders', (req, res) => {
         }));
 
         const enriched = traders.map(t => {
-            const daysRatio = t.activeDays / daysBack;
-            const avgTxPerDay = t.txCount / Math.max(t.activeDays, 1);
-            
             let anomalyScore = 0;
             let isAnomalous = false;
             const patterns = {};
-
-            if (daysRatio >= 0.9 && avgTxPerDay < 3) {
-                anomalyScore += 0.5;
-                patterns.consistentVolume = { triggered: true, activeDays: t.activeDays, daysRatio };
+            
+            const cvInfo = cvMap.get(t.wallet);
+            
+            // Primary check: coefficient of variation of daily volume (Pavel's method)
+            // Low CV = suspiciously consistent daily volume = likely wash trading
+            if (cvInfo && cvInfo.cv < ANOMALY_CONFIG.cvThreshold) {
+                // CV < 0.15 → score scales from 0.3 (borderline) to 1.0 (very suspicious)
+                const cvScore = Math.min(1.0, (ANOMALY_CONFIG.cvThreshold - cvInfo.cv) / ANOMALY_CONFIG.cvThreshold);
+                anomalyScore += cvScore * 0.7; // weight: 70% of total score
+                patterns.volumeDeviation = { 
+                    triggered: true, 
+                    cv: Math.round(cvInfo.cv * 1000) / 1000,
+                    avgDailySOL: Math.round(cvInfo.avg_daily_sol * 10000) / 10000,
+                    stdDailySOL: Math.round(cvInfo.std_daily_sol * 10000) / 10000,
+                    activeDays: cvInfo.active_days
+                };
             }
 
+            // Secondary: dust spam (many txs, almost no fees)
             if (t.txCount > 50 && t.totalSOL < 0.001) {
-                anomalyScore += 0.5;
+                anomalyScore += 0.3;
                 patterns.dustSpam = { triggered: true, txCount: t.txCount, totalSOL: t.totalSOL };
             }
 
+            anomalyScore = Math.min(anomalyScore, 1.0);
             isAnomalous = anomalyScore >= ANOMALY_CONFIG.anomalyScoreThreshold;
 
             return {
                 ...t,
-                anomalyScore: Math.min(anomalyScore, 1.0),
+                anomalyScore: Math.round(anomalyScore * 100) / 100,
                 isAnomalous,
                 patterns,
                 status: isAnomalous ? 'anomalous' : 'clean',
@@ -132,6 +148,10 @@ app.get('/api/anomalies', (req, res) => {
         const daysBack = parseInt(req.query.days) || 30;
         
         const rows = getTraders(terminal, daysBack, 200);
+        
+        // Get CV data — wallets with low CV are anomalous
+        const cvData = getTraderVolatility(terminal, daysBack, ANOMALY_CONFIG.minDaysForCV);
+        const cvMap = new Map(cvData.map(r => [r.sender, r]));
 
         const anomalous = [];
         for (const r of rows) {
@@ -142,26 +162,34 @@ app.get('/api/anomalies', (req, res) => {
                 activeDays: r.activeDays || 0,
             };
 
-            const daysRatio = t.activeDays / daysBack;
-            const avgTxPerDay = t.txCount / Math.max(t.activeDays, 1);
-
             let score = 0;
             const patterns = {};
+            const cvInfo = cvMap.get(t.wallet);
 
-            if (daysRatio >= 0.9 && avgTxPerDay < 3) {
-                score += 0.5;
-                patterns.consistentVolume = { triggered: true, activeDays: t.activeDays, daysRatio };
+            // Primary: low CV = wash trading
+            if (cvInfo && cvInfo.cv < ANOMALY_CONFIG.cvThreshold) {
+                const cvScore = Math.min(1.0, (ANOMALY_CONFIG.cvThreshold - cvInfo.cv) / ANOMALY_CONFIG.cvThreshold);
+                score += cvScore * 0.7;
+                patterns.volumeDeviation = {
+                    triggered: true,
+                    cv: Math.round(cvInfo.cv * 1000) / 1000,
+                    avgDailySOL: Math.round(cvInfo.avg_daily_sol * 10000) / 10000,
+                    activeDays: cvInfo.active_days
+                };
             }
 
+            // Secondary: dust spam
             if (t.txCount > 50 && t.totalSOL < 0.001) {
-                score += 0.5;
+                score += 0.3;
                 patterns.dustSpam = { triggered: true };
             }
 
-            if (score >= ANOMALY_CONFIG.anomalyScoreThreshold || score >= 0.9) {
+            score = Math.min(score, 1.0);
+
+            if (score >= ANOMALY_CONFIG.anomalyScoreThreshold) {
                 anomalous.push({
                     ...t,
-                    anomalyScore: Math.min(score, 1.0),
+                    anomalyScore: Math.round(score * 100) / 100,
                     patterns,
                 });
             }
