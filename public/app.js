@@ -211,63 +211,79 @@ function setupCarousel() {
     });
 }
 
+let _loadController = null;
+let _loadVersion = 0;
+
 async function loadDashboard() {
+    // Cancel any in-flight request
+    if (_loadController) _loadController.abort();
+    _loadController = new AbortController();
+    const signal = _loadController.signal;
+    const version = ++_loadVersion;
+    
     updateStatus('loading', 'Querying Indexer...');
 
     try {
         const t = currentTerminal;
+        const fetchOpts = { signal };
         
         let dailyRes;
         if (t === 'overall') {
-            const termsRes = await fetch(`${API_BASE}/api/terminals`).then(r => r.json());
+            const termsRes = await fetch(`${API_BASE}/api/terminals`, fetchOpts).then(r => r.json());
             const activeTerms = termsRes.terminals.filter(x => x.enabled).map(x => x.name);
             const promises = activeTerms.map(term => 
-                fetch(`${API_BASE}/api/fees/daily?terminal=${term}&days=30`).then(r => r.json().then(data => ({ term, data: data.daily || [] })))
+                fetch(`${API_BASE}/api/fees/daily?terminal=${term}&days=30`, fetchOpts).then(r => r.json().then(data => ({ term, data: data.daily || [] })))
             );
             const allDaily = await Promise.all(promises);
+            if (version !== _loadVersion) return; // stale
             state.overallChartData = allDaily;
             dailyRes = { daily: [] };
 
             // Also fetch traders & anomalies from all terminals
             const traderPromises = activeTerms.map(term =>
-                fetch(`${API_BASE}/api/traders?terminal=${term}&limit=30`).then(r => r.json().then(data => 
+                fetch(`${API_BASE}/api/traders?terminal=${term}&limit=30`, fetchOpts).then(r => r.json().then(data => 
                     (data.traders || []).map(t => ({ ...t, platform: term.charAt(0).toUpperCase() + term.slice(1) }))
                 ))
             );
             const anomalyPromises = activeTerms.map(term =>
-                fetch(`${API_BASE}/api/anomalies?terminal=${term}`).then(r => r.json().then(data =>
+                fetch(`${API_BASE}/api/anomalies?terminal=${term}`, fetchOpts).then(r => r.json().then(data =>
                     (data.anomalous || []).map(a => ({ ...a, platform: term.charAt(0).toUpperCase() + term.slice(1) }))
                 ))
             );
             const allTraders = (await Promise.all(traderPromises)).flat();
             const allAnomalies = (await Promise.all(anomalyPromises)).flat();
+            if (version !== _loadVersion) return; // stale
             // Sort by totalSOL descending, take top 30
             state.traders = allTraders.sort((a,b) => (b.totalSOL || 0) - (a.totalSOL || 0)).slice(0, 30);
             state.anomalous = allAnomalies.sort((a,b) => (b.anomalyScore || 0) - (a.anomalyScore || 0)).slice(0, 30);
         } else {
-            dailyRes = await fetch(`${API_BASE}/api/fees/daily?terminal=${t}&days=30`).then(r => r.json());
+            dailyRes = await fetch(`${API_BASE}/api/fees/daily?terminal=${t}&days=30`, fetchOpts).then(r => r.json());
             state.overallChartData = null;
         }
+
+        if (version !== _loadVersion) return; // stale
 
         let summaryRes, tradersRes, anomaliesRes, terminalsRes;
         if (t === 'overall') {
             // In overall mode, traders & anomalies already fetched above
             [summaryRes, terminalsRes] = await Promise.all([
-                fetch(`${API_BASE}/api/fees/summary?terminal=${t}`).then(r => r.json()),
-                fetch(`${API_BASE}/api/terminals`).then(r => r.json()),
+                fetch(`${API_BASE}/api/fees/summary?terminal=${t}`, fetchOpts).then(r => r.json()),
+                fetch(`${API_BASE}/api/terminals`, fetchOpts).then(r => r.json()),
             ]);
             tradersRes = { traders: [] };
             anomaliesRes = { anomalous: [], stats: {} };
         } else {
             [summaryRes, tradersRes, anomaliesRes, terminalsRes] = await Promise.all([
-                fetch(`${API_BASE}/api/fees/summary?terminal=${t}`).then(r => r.json()),
-                fetch(`${API_BASE}/api/traders?terminal=${t}&limit=30`).then(r => r.json()),
-                fetch(`${API_BASE}/api/anomalies?terminal=${t}`).then(r => r.json()),
-                fetch(`${API_BASE}/api/terminals`).then(r => r.json()),
+                fetch(`${API_BASE}/api/fees/summary?terminal=${t}`, fetchOpts).then(r => r.json()),
+                fetch(`${API_BASE}/api/traders?terminal=${t}&limit=30`, fetchOpts).then(r => r.json()),
+                fetch(`${API_BASE}/api/anomalies?terminal=${t}`, fetchOpts).then(r => r.json()),
+                fetch(`${API_BASE}/api/terminals`, fetchOpts).then(r => r.json()),
             ]);
             state.traders = tradersRes.traders || [];
             state.anomalous = anomaliesRes.anomalous || [];
         }
+
+        if (version !== _loadVersion) return; // stale — user already clicked another tab
 
         state.dailyData = dailyRes.daily || [];
         state.summary = summaryRes.summary || {};
@@ -321,6 +337,7 @@ async function loadDashboard() {
         if (el) el.textContent = `last updated: ${formatTime(new Date())}`;
 
     } catch (err) {
+        if (err.name === 'AbortError') return; // cancelled by new tab click — ignore
         console.error('Dashboard load error:', err);
         updateStatus('error', 'Query failed');
         renderDemoState();
