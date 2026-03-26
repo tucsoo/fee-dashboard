@@ -39,8 +39,9 @@ function getVaultQueryAddresses(vaultAddress) {
     return addresses;
 }
 
-const CHUNK_SIZE = 25; // number of transactions to fetch per RPC call
-const POLL_INTERVAL = 15000; // 15 seconds
+const CHUNK_SIZE = 50; // number of transactions to fetch per RPC call
+const POLL_INTERVAL = 5000; // 5 seconds — fast polling to keep up with volume
+const VAULT_CONCURRENCY = 5; // how many vaults to sync in parallel
 
 let currentSolPrice = 175; // Fallback
 let lastPriceFetch = 0;
@@ -307,44 +308,35 @@ async function processSignatures(signaturesToProcess, feeVaults, terminalName) {
 }
 
 /**
- * Syncs a single terminal (all its vaults) — FORWARD ONLY.
- * First run: saves marker (newest sig) without processing. No backwards crawl.
- * Subsequent runs: fetches everything newer than marker using `until`.
+ * Syncs a single vault — FORWARD ONLY, parallel address queries.
  */
-async function syncTerminal(terminalName, vaults) {
-    if (!vaults || vaults.length === 0) return;
-
-    for (const vault of vaults) {
-        try {
-            const state = getLastSyncState(vault) || {};
-            const lastSig = state.last_signature;
-            
-            // Query addresses: base vault + USDC/USDT ATAs
-            const queryAddresses = getVaultQueryAddresses(vault);
-            
-            if (!lastSig) {
-                // FIRST RUN: just save the newest signature as our starting marker.
-                // We don't process anything — indexer works forward-only from here.
-                try {
-                    const sigs = await rpcPool.getSignaturesForAddress(queryAddresses[0], { limit: 1 });
-                    if (sigs && sigs.length > 0) {
-                        updateSyncState(vault, sigs[0].signature, sigs[0].blockTime, 0);
-                        console.log(`[Indexer] ${terminalName} (${vault.slice(0, 4)}...): marker set. Collecting forward from now.`);
-                    }
-                } catch (e) {
-                    console.warn(`[Indexer] Failed to set marker for ${terminalName} (${vault.slice(0, 4)}...): ${e.message}`);
+async function syncVault(vault, vaults, terminalName) {
+    try {
+        const state = getLastSyncState(vault) || {};
+        const lastSig = state.last_signature;
+        
+        const queryAddresses = getVaultQueryAddresses(vault);
+        
+        if (!lastSig) {
+            // FIRST RUN: just save marker
+            try {
+                const sigs = await rpcPool.getSignaturesForAddress(queryAddresses[0], { limit: 1 });
+                if (sigs && sigs.length > 0) {
+                    updateSyncState(vault, sigs[0].signature, sigs[0].blockTime, 0);
+                    console.log(`[Indexer] ${terminalName} (${vault.slice(0, 4)}...): marker set.`);
                 }
-                continue;
+            } catch (e) {
+                console.warn(`[Indexer] Failed to set marker for ${vault.slice(0, 4)}...: ${e.message}`);
             }
-            
-            // SUBSEQUENT RUNS: fetch all NEW signatures since lastSig
-            // `until` = return sigs NEWER than this (not including it)
-            const MAX_PAGES = 5; // safety: max 5 * 1000 = 5000 new sigs per poll
-            const allSigArrays = [];
-            
-            for (const addr of queryAddresses) {
+            return;
+        }
+        
+        // Fetch new sigs from ALL addresses in PARALLEL
+        const allSigArrays = await Promise.all(
+            queryAddresses.map(async (addr) => {
                 const addrSigs = [];
                 let beforeSig = undefined;
+                const MAX_PAGES = 5;
                 
                 for (let page = 0; page < MAX_PAGES; page++) {
                     const options = { limit: 1000, until: lastSig };
@@ -362,60 +354,81 @@ async function syncTerminal(terminalName, vaults) {
                     
                     if (batch.length < 1000) break;
                     beforeSig = batch[batch.length - 1].signature;
-                    await new Promise(r => setTimeout(r, 100));
                 }
                 
-                allSigArrays.push(addrSigs);
+                return addrSigs;
+            })
+        );
+        
+        // Merge and de-duplicate
+        const sigMap = new Map();
+        for (const sigs of allSigArrays) {
+            for (const s of sigs) {
+                if (!sigMap.has(s.signature)) sigMap.set(s.signature, s);
             }
-            
-            // Merge and de-duplicate
-            const sigMap = new Map();
-            for (const sigs of allSigArrays) {
-                for (const s of sigs) {
-                    if (!sigMap.has(s.signature)) {
-                        sigMap.set(s.signature, s);
-                    }
-                }
-            }
-            const newSignatures = [...sigMap.values()].sort((a, b) => b.blockTime - a.blockTime);
-            
-            if (newSignatures.length === 0) continue;
-            
-            const inserted = await processSignatures(newSignatures, vaults, terminalName);
-            
-            // Update marker to newest sig
-            const mostRecentSig = newSignatures[0];
-            updateSyncState(vault, mostRecentSig.signature, mostRecentSig.blockTime, inserted);
-            
-            if (inserted > 0) {
-                console.log(`[Indexer] ${terminalName} (${vault.slice(0, 4)}...): +${inserted} fees from ${newSignatures.length} new txs.`);
-            }
-            
-        } catch (e) {
-            console.error(`[Indexer] Sync error on ${terminalName} vault ${vault}:`, e.message);
         }
+        const newSignatures = [...sigMap.values()].sort((a, b) => b.blockTime - a.blockTime);
+        
+        if (newSignatures.length === 0) return;
+        
+        const inserted = await processSignatures(newSignatures, vaults, terminalName);
+        
+        const mostRecentSig = newSignatures[0];
+        updateSyncState(vault, mostRecentSig.signature, mostRecentSig.blockTime, inserted);
+        
+        if (inserted > 0) {
+            console.log(`[Indexer] ${terminalName} (${vault.slice(0, 4)}...): +${inserted} fees from ${newSignatures.length} txs.`);
+        }
+    } catch (e) {
+        console.error(`[Indexer] Sync error on ${terminalName} vault ${vault.slice(0, 4)}...:`, e.message);
     }
 }
 
 /**
- * Main indexer loop
+ * Run async tasks with concurrency limit
+ */
+async function runWithConcurrency(tasks, limit) {
+    const results = [];
+    const executing = new Set();
+    
+    for (const task of tasks) {
+        const p = task().then(r => { executing.delete(p); return r; });
+        executing.add(p);
+        results.push(p);
+        
+        if (executing.size >= limit) {
+            await Promise.race(executing);
+        }
+    }
+    
+    return Promise.all(results);
+}
+
+/**
+ * Main indexer loop — parallel vault processing
  */
 export async function startIndexer() {
-    console.log('[Indexer] Starting custom background indexer with RPC Rotation...');
+    console.log('[Indexer] Starting parallel indexer with RPC Rotation...');
+    console.log(`[Indexer] Config: CHUNK_SIZE=${CHUNK_SIZE}, POLL_INTERVAL=${POLL_INTERVAL}ms, VAULT_CONCURRENCY=${VAULT_CONCURRENCY}`);
     
-    // Ensure DB is initialized
     getDB();
     
     while (true) {
         await updateSolPrice();
         
+        // Build a flat list of all vault sync tasks
+        const tasks = [];
         for (const [terminalName, vaults] of Object.entries(TERMINAL_VAULTS)) {
-            await syncTerminal(terminalName, vaults);
-            // Small pause between terminals
-            await new Promise(r => setTimeout(r, 1000));
+            for (const vault of vaults) {
+                tasks.push(() => syncVault(vault, vaults, terminalName));
+            }
         }
         
-        // Wait before next global poll
+        // Run all vault syncs with concurrency limit
+        await runWithConcurrency(tasks, VAULT_CONCURRENCY);
+        
+        // Wait before next poll
         await new Promise(r => setTimeout(r, POLL_INTERVAL));
     }
 }
+
