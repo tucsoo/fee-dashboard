@@ -12,6 +12,25 @@ const DB_PATH = path.join(DATA_DIR, 'axiom_fees.db');
 
 let db = null;
 
+/**
+ * Wipe and reinitialize the database (fresh start)
+ */
+export function resetDB() {
+    if (db) {
+        db.exec('DROP TABLE IF EXISTS transactions');
+        db.exec('DROP TABLE IF EXISTS sync_state');
+        db.close();
+        db = null;
+    }
+    // Delete the file
+    try { fs.unlinkSync(DB_PATH); } catch(e) {}
+    try { fs.unlinkSync(DB_PATH + '-wal'); } catch(e) {}
+    try { fs.unlinkSync(DB_PATH + '-shm'); } catch(e) {}
+    // Reinitialize
+    initDB();
+    console.log('🗑️ Database reset complete — starting fresh.');
+}
+
 export function initDB() {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     db = new Database(DB_PATH);

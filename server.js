@@ -11,7 +11,8 @@ import {
     getSummary,
     getDB,
     getTerminalRankings,
-    getTraderVolatility
+    getTraderVolatility,
+    resetDB
 } from './src/database.js';
 import { SERVER_CONFIG, getVaultsForTerminal, ANOMALY_CONFIG, TERMINAL_VAULTS } from './src/config.js';
 import { startIndexer } from './src/indexer/index.js';
@@ -235,6 +236,16 @@ app.get('/api/terminals', (req, res) => {
         
         terminals.sort((a,b) => a.rank - b.rank);
         res.json({ terminals });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Admin: reset database (wipe everything, start fresh)
+app.post('/api/admin/reset', (req, res) => {
+    try {
+        resetDB();
+        res.json({ success: true, message: 'Database reset. Indexer will set new markers on next cycle.' });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
