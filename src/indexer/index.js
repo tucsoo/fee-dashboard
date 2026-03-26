@@ -41,7 +41,7 @@ function getVaultQueryAddresses(vaultAddress) {
 
 const CHUNK_SIZE = 50; // number of transactions to fetch per RPC call
 const POLL_INTERVAL = 5000; // 5 seconds — fast polling to keep up with volume
-const VAULT_CONCURRENCY = 5; // how many vaults to sync in parallel
+const VAULT_CONCURRENCY = 10; // how many vaults to sync in parallel
 
 let currentSolPrice = 175; // Fallback
 let lastPriceFetch = 0;
