@@ -414,18 +414,22 @@ export async function startIndexer() {
     getDB();
     
     while (true) {
-        await updateSolPrice();
-        
-        // Build a flat list of all vault sync tasks
-        const tasks = [];
-        for (const [terminalName, vaults] of Object.entries(TERMINAL_VAULTS)) {
-            for (const vault of vaults) {
-                tasks.push(() => syncVault(vault, vaults, terminalName));
+        try {
+            await updateSolPrice();
+            
+            // Build a flat list of all vault sync tasks
+            const tasks = [];
+            for (const [terminalName, vaults] of Object.entries(TERMINAL_VAULTS)) {
+                for (const vault of vaults) {
+                    tasks.push(() => syncVault(vault, vaults, terminalName));
+                }
             }
+            
+            // Run all vault syncs with concurrency limit
+            await runWithConcurrency(tasks, VAULT_CONCURRENCY);
+        } catch (e) {
+            console.error('[Indexer] Cycle error (will retry):', e.message);
         }
-        
-        // Run all vault syncs with concurrency limit
-        await runWithConcurrency(tasks, VAULT_CONCURRENCY);
         
         // Wait before next poll
         await new Promise(r => setTimeout(r, POLL_INTERVAL));
