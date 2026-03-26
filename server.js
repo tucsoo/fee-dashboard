@@ -74,6 +74,27 @@ app.get('/api/fees/daily', (req, res) => {
     }
 });
 
+// Single endpoint for Overall tab — all terminals' daily data in one call
+app.get('/api/fees/daily-all', (req, res) => {
+    try {
+        const daysBack = parseInt(req.query.days) || 30;
+        const result = {};
+        for (const [terminalName] of Object.entries(TERMINAL_VAULTS)) {
+            const rows = getDailyFees(terminalName, daysBack);
+            result[terminalName] = rows.map(r => ({
+                date: r.date,
+                totalSOL: r.totalSOL || 0,
+                txCount: r.txCount || 0,
+                uniqueTraders: r.uniqueTraders || 0,
+            }));
+        }
+        res.json(result);
+    } catch (error) {
+        console.error('Daily-all error:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.get('/api/traders', (req, res) => {
     try {
         const terminal = req.query.terminal || 'axiom';
