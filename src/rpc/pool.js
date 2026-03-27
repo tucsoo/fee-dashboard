@@ -1,41 +1,58 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import fetch from 'node-fetch'; // web3.js uses native fetch, but we might pass custom fetch if needed
 
+import dotenv from 'dotenv';
+dotenv.config();
+
 /**
  * List of RPC Nodes. 
- * We use Jupiter's frontend RPCs with spoofed headers to bypass rate limits.
+ * We use Helius if keys are provided in .env (crucial for Render datacenter IPs to bypass WAF),
+ * otherwise we fallback to Jupiter's frontend RPCs with spoofed headers.
  */
-const RPC_NODES = [
-    {
-        name: "Mercuria Frontend",
-        url: "https://mercuria-fronten-1cd8.mainnet.rpcpool.com",
-        headers: {
-            "Origin": "https://jup.ag",
-            "Referer": "https://jup.ag/"
-        }
-    },
-    {
-        name: "Jupiter Frontend",
-        url: "https://jupiter-frontend.rpcpool.com",
-        headers: {
-            "Origin": "https://jup.ag",
-            "Referer": "https://jup.ag/"
-        }
-    },
-    {
-        name: "Jupiter FE Helius",
-        url: "https://jupiter-fe.helius-rpc.com",
-        headers: {
-            "Origin": "https://jup.ag",
-            "Referer": "https://jup.ag/"
-        }
-    },
-    {
-        name: "Solana Public",
-        url: "https://api.mainnet-beta.solana.com",
+let RPC_NODES = [];
+
+if (process.env.HELIUS_API_KEYS) {
+    const keys = process.env.HELIUS_API_KEYS.split(',').map(k => k.trim()).filter(k => k);
+    RPC_NODES = keys.map((key, i) => ({
+        name: `Helius Key ${i+1}`,
+        url: `https://mainnet.helius-rpc.com/?api-key=${key}`,
         headers: {}
-    }
-];
+    }));
+    console.log(`[RpcPool] Loaded ${RPC_NODES.length} Helius API keys from environment.`);
+} else {
+    console.warn(`[RpcPool] WARNING: No HELIUS_API_KEYS found in .env! Using spoofed Jupiter RPCs (may fail on Render).`);
+    RPC_NODES = [
+        {
+            name: "Mercuria Frontend",
+            url: "https://mercuria-fronten-1cd8.mainnet.rpcpool.com",
+            headers: {
+                "Origin": "https://jup.ag",
+                "Referer": "https://jup.ag/"
+            }
+        },
+        {
+            name: "Jupiter Frontend",
+            url: "https://jupiter-frontend.rpcpool.com",
+            headers: {
+                "Origin": "https://jup.ag",
+                "Referer": "https://jup.ag/"
+            }
+        },
+        {
+            name: "Jupiter FE Helius",
+            url: "https://jupiter-fe.helius-rpc.com",
+            headers: {
+                "Origin": "https://jup.ag",
+                "Referer": "https://jup.ag/"
+            }
+        },
+        {
+            name: "Solana Public",
+            url: "https://api.mainnet-beta.solana.com",
+            headers: {}
+        }
+    ];
+}
 
 export class RpcPool {
     constructor() {
