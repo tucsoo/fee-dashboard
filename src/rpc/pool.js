@@ -1,5 +1,8 @@
 import { Connection, PublicKey } from '@solana/web3.js';
-import fetch from 'node-fetch'; // web3.js uses native fetch, but we might pass custom fetch if needed
+import fetch from 'node-fetch';
+import { HttpsProxyAgent } from 'https-proxy-agent';
+import dotenv from 'dotenv';
+dotenv.config();
 
 // Full browser fingerprint to bypass Cloudflare / WAF blocks
 const BROWSER_HEADERS = {
@@ -43,6 +46,20 @@ const RPC_NODES = [
     }
 ];
 
+// Setup HTTP Proxy if provided
+const proxyUrl = process.env.HTTP_PROXY;
+const proxyAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+if (proxyAgent) {
+    console.log(`[RpcPool] Proxy configured: Routing all RPC traffic through ${proxyUrl}`);
+} else {
+    console.warn(`[RpcPool] WARNING: No HTTP_PROXY set. Render IPs will likely be blocked (403 Forbidden).`);
+}
+
+// Custom fetch to force web3.js to use our proxy agent
+const customFetch = (url, options) => {
+    return fetch(url, { ...options, agent: proxyAgent });
+};
+
 export class RpcPool {
     constructor() {
         this.currentIndex = 0;
@@ -50,7 +67,8 @@ export class RpcPool {
             ...config,
             connection: new Connection(config.url, {
                 httpHeaders: config.headers,
-                commitment: 'confirmed'
+                commitment: 'confirmed',
+                fetch: customFetch
             })
         }));
     }
