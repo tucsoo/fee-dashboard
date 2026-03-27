@@ -1,58 +1,47 @@
 import { Connection, PublicKey } from '@solana/web3.js';
 import fetch from 'node-fetch'; // web3.js uses native fetch, but we might pass custom fetch if needed
 
-import dotenv from 'dotenv';
-dotenv.config();
+// Full browser fingerprint to bypass Cloudflare / WAF blocks
+const BROWSER_HEADERS = {
+    "Origin": "https://jup.ag",
+    "Referer": "https://jup.ag/",
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Accept": "application/json",
+    "Accept-Language": "en-US,en;q=0.9,ru;q=0.8",
+    "Sec-Ch-Ua": '"Google Chrome";v="123", "Not:A-Brand";v="8", "Chromium";v="123"',
+    "Sec-Ch-Ua-Mobile": "?0",
+    "Sec-Ch-Ua-Platform": '"macOS"',
+    "Sec-Fetch-Dest": "empty",
+    "Sec-Fetch-Mode": "cors",
+    "Sec-Fetch-Site": "cross-site",
+};
 
 /**
  * List of RPC Nodes. 
- * We use Helius if keys are provided in .env (crucial for Render datacenter IPs to bypass WAF),
- * otherwise we fallback to Jupiter's frontend RPCs with spoofed headers.
+ * We use Jupiter's frontend RPCs with fully spoofed browser headers to bypass rate limits and IP blocks.
  */
-let RPC_NODES = [];
-
-if (process.env.HELIUS_API_KEYS) {
-    const keys = process.env.HELIUS_API_KEYS.split(',').map(k => k.trim()).filter(k => k);
-    RPC_NODES = keys.map((key, i) => ({
-        name: `Helius Key ${i+1}`,
-        url: `https://mainnet.helius-rpc.com/?api-key=${key}`,
+const RPC_NODES = [
+    {
+        name: "Mercuria Frontend",
+        url: "https://mercuria-fronten-1cd8.mainnet.rpcpool.com",
+        headers: BROWSER_HEADERS
+    },
+    {
+        name: "Jupiter Frontend",
+        url: "https://jupiter-frontend.rpcpool.com",
+        headers: BROWSER_HEADERS
+    },
+    {
+        name: "Jupiter FE Helius",
+        url: "https://jupiter-fe.helius-rpc.com",
+        headers: BROWSER_HEADERS
+    },
+    {
+        name: "Solana Public",
+        url: "https://api.mainnet-beta.solana.com",
         headers: {}
-    }));
-    console.log(`[RpcPool] Loaded ${RPC_NODES.length} Helius API keys from environment.`);
-} else {
-    console.warn(`[RpcPool] WARNING: No HELIUS_API_KEYS found in .env! Using spoofed Jupiter RPCs (may fail on Render).`);
-    RPC_NODES = [
-        {
-            name: "Mercuria Frontend",
-            url: "https://mercuria-fronten-1cd8.mainnet.rpcpool.com",
-            headers: {
-                "Origin": "https://jup.ag",
-                "Referer": "https://jup.ag/"
-            }
-        },
-        {
-            name: "Jupiter Frontend",
-            url: "https://jupiter-frontend.rpcpool.com",
-            headers: {
-                "Origin": "https://jup.ag",
-                "Referer": "https://jup.ag/"
-            }
-        },
-        {
-            name: "Jupiter FE Helius",
-            url: "https://jupiter-fe.helius-rpc.com",
-            headers: {
-                "Origin": "https://jup.ag",
-                "Referer": "https://jup.ag/"
-            }
-        },
-        {
-            name: "Solana Public",
-            url: "https://api.mainnet-beta.solana.com",
-            headers: {}
-        }
-    ];
-}
+    }
+];
 
 export class RpcPool {
     constructor() {
